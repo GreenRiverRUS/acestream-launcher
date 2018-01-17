@@ -7,9 +7,14 @@ import sys
 import time
 import hashlib
 import argparse
+import json
+
 import psutil
 import pexpect
 import notify2
+
+from filename_selector_app import FilenamesSelectorWindow
+
 
 class AcestreamLauncher(object):
     """Acestream Launcher"""
@@ -53,7 +58,9 @@ class AcestreamLauncher(object):
         messages = {
             'running': 'Acestream engine running.',
             'waiting': 'Waiting for channel response...',
+            'noselect': 'Choose nothing to play...',
             'started': 'Streaming started. Launching player.',
+            'noinfo': 'Acestream unable to load content info!',
             'noauth': 'Error authenticating to Acestream!',
             'noengine': 'Acstream engine not found in provided path!',
             'unavailable': 'Acestream channel unavailable!'
@@ -86,7 +93,7 @@ class AcestreamLauncher(object):
         session = pexpect.spawn('telnet localhost 62062')
 
         try:
-            session.timeout = 10
+            session.timeout = 20
             session.sendline('HELLOBG version=3')
             session.expect('key=.*')
 
@@ -99,15 +106,33 @@ class AcestreamLauncher(object):
             session.sendline('READY key=' + response_key)
             session.expect('AUTH.*')
             session.sendline('USERDATA [{"gender": "1"}, {"age": "3"}]')
-
-            self.notify('waiting')
         except (pexpect.TIMEOUT, pexpect.EOF):
             self.notify('noauth')
             self.close_player(1)
 
         try:
-            session.timeout = 30
-            session.sendline('START PID ' + pid + ' 0')
+            session.sendline('LOADASYNC 42 PID ' + pid)
+            session.expect('LOADRESP 42 .*')
+            content_info = session.after.decode('utf-8').split('\n')[0].split(maxsplit=2)[-1]
+            content_info = json.loads(content_info)
+
+            selector = FilenamesSelectorWindow(content_info['files'])
+            selector.open()
+            file_id = selector.selected_file_index
+            filename = selector.selected_file
+            print('Selected: ' + str(filename))
+
+            if file_id is None:
+                self.notify('noselect')
+                self.close_player(1)
+            self.notify('waiting')
+        except (pexpect.TIMEOUT, pexpect.EOF):
+            self.notify('noinfo')
+            self.close_player(1)
+
+        try:
+            session.timeout = 60
+            session.sendline('START PID {} {}'.format(pid, file_id))
             session.expect('http://.*')
 
             self.session = session
