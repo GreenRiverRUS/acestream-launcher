@@ -13,7 +13,6 @@ Acestream Launcher allows you to open Acestream links with a Media Player of you
 ## Optional arguments
     -h, --help            Show this help message and exit
     -p, --player PLAYER   The media player command to use (default: vlc)
-    -e, --engine ENGINE   The engine command to use (default: acestreamengine --client-console)
 
 ## Installation
 Install required dependencies and run `install.sh` as root. The script will install acestream-launcher in `opt` directory.
