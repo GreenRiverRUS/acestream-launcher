@@ -3,6 +3,7 @@
 
 """Acestream Launcher: Open acestream links with any media player"""
 
+import os
 import sys
 import time
 import hashlib
@@ -39,6 +40,7 @@ class AcestreamLauncher(object):
 
         notify2.init(self.app_name)
         self.notifier = notify2.Notification(self.app_name)
+        self.notify('running')
         self.session = None
         self.content_info = None
 
@@ -58,7 +60,7 @@ class AcestreamLauncher(object):
 
         icon = self.args.player.split()[0]
         messages = {
-            'running': 'Acestream engine running.',
+            'running': 'Acestream Launcher started.',
             'waiting': 'Waiting for channel response...',
             'noselect': 'Choose nothing to play...',
             'started': 'Streaming started. Launching player.',
@@ -81,7 +83,6 @@ class AcestreamLauncher(object):
         else:
             try:
                 psutil.Popen(['acestreamengine', '--client-console'])
-                self.notify('running')
                 time.sleep(5)
             except FileNotFoundError:
                 self.notify('noengine')
@@ -151,7 +152,7 @@ class AcestreamLauncher(object):
         print('Selected: ' + str(filename))
 
         if file_id is None:
-            self.notify('noselect')
+            # self.notify('noselect')
             self.close_session()
             sys.exit(1)
 
@@ -183,7 +184,9 @@ class AcestreamLauncher(object):
         player_args.append(url)
 
         try:
-            player = psutil.Popen(player_args)
+            env = dict(os.environ)
+            env.pop('LD_PRELOAD')  # fuck opera!
+            player = psutil.Popen(player_args, env=env)
             player.wait()
         except FileNotFoundError:
             self.notify('noplayer')
