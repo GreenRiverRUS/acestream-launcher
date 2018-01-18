@@ -38,8 +38,10 @@ class DataRow(Gtk.ListBoxRow):
 
 
 class FilenamesSelectorWindow(Gtk.Window):
-    def __init__(self, filenames: List[List[Union[str, int]]]):
-        Gtk.Window.__init__(self, title='Choose file to start playing', type_hint=Gdk.WindowTypeHint.DIALOG)
+    def __init__(self, filenames: List[List[Union[str, int]]], icon='vlc'):
+        Gtk.Window.__init__(self, title='AceStreamLauncher: Choose file to start playing',
+                            type_hint=Gdk.WindowTypeHint.DIALOG)
+        self.set_icon_name(icon)
         self.set_border_width(5)
         self.set_resizable(False)
         self.set_position(Gtk.WindowPosition.CENTER)

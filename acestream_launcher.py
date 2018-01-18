@@ -18,7 +18,6 @@ from filename_selector_app import FilenamesSelectorWindow
 
 class AcestreamLauncher(object):
     """Acestream Launcher"""
-
     def __init__(self):
         parser = argparse.ArgumentParser(
             prog='acestream-launcher',
@@ -30,26 +29,29 @@ class AcestreamLauncher(object):
             help='the acestream url to play'
         )
         parser.add_argument(
-            '-e', '--engine',
-            help='the engine command to use (default: acestreamengine --client-console)',
-            default='acestreamengine --client-console'
-        )
-        parser.add_argument(
             '-p', '--player',
             help='the media player command to use (default: vlc)',
             default='vlc'
         )
 
-        self.appname = 'Acestream Launcher'
+        self.app_name = 'Acestream Launcher'
         self.args = parser.parse_args()
 
-        notify2.init(self.appname)
-        self.notifier = notify2.Notification(self.appname)
+        notify2.init(self.app_name)
+        self.notifier = notify2.Notification(self.app_name)
+        self.session = None
+        self.content_info = None
 
-        self.start_acestream()
+        self.ensure_engine_running()
+
+    def open(self):
         self.start_session()
-        self.start_player()
-        self.close_player()
+        self.content_info = self.load_content_info()
+
+        while True:
+            file_id = self.select_file_id()
+            url = self.start_downloading(file_id)
+            self.start_player(url)
 
     def notify(self, message):
         """Show player status notifications"""
@@ -62,35 +64,34 @@ class AcestreamLauncher(object):
             'started': 'Streaming started. Launching player.',
             'noinfo': 'Acestream unable to load content info!',
             'noauth': 'Error authenticating to Acestream!',
-            'noengine': 'Acstream engine not found in provided path!',
+            'noengine': 'Acestream engine not found in the provided path!',
+            'noplayer': 'Player not found in the provided path!',
             'unavailable': 'Acestream channel unavailable!'
         }
 
         print(messages[message])
-        self.notifier.update(self.appname, messages[message], icon)
+        self.notifier.update(self.app_name, messages[message], icon)
         self.notifier.show()
 
-    def start_acestream(self):
+    def ensure_engine_running(self):
         """Start acestream engine"""
-
         for process in psutil.process_iter():
             if 'acestreamengine' in process.name():
-                process.kill()
-
-        try:
-            engine_args = self.args.engine.split()
-            self.acestream = psutil.Popen(engine_args)
-            self.notify('running')
-            time.sleep(5)
-        except FileNotFoundError:
-            self.notify('noengine')
-            self.close_player(1)
+                break
+        else:
+            try:
+                psutil.Popen(['acestreamengine', '--client-console'])
+                self.notify('running')
+                time.sleep(5)
+            except FileNotFoundError:
+                self.notify('noengine')
+                sys.exit(1)
 
     def start_session(self):
         """Start acestream telnet session"""
-
         product_key = 'n51LvQoTlJzNGaFxseRK-uvnvX-sD4Vm5Axwmc4UcoD-jruxmKsuJaH0eVgE'
         session = pexpect.spawn('telnet localhost 62062')
+        self.session = session
 
         try:
             session.timeout = 20
@@ -101,79 +102,99 @@ class AcestreamLauncher(object):
             signature = (request_key + product_key).encode('utf-8')
             signature = hashlib.sha1(signature).hexdigest()
             response_key = product_key.split('-')[0] + '-' + signature
-            pid = self.args.url.split('://')[1]
 
             session.sendline('READY key=' + response_key)
             session.expect('AUTH.*')
             session.sendline('USERDATA [{"gender": "1"}, {"age": "3"}]')
         except (pexpect.TIMEOUT, pexpect.EOF):
             self.notify('noauth')
-            self.close_player(1)
+            self.close_session()
+            sys.exit(1)
+
+        return session
+
+    def close_session(self, started=False):
+        if started:
+            self.session.sendline('STOP')
+        self.session.sendline('SHUTDOWN')
+
+    def load_content_info(self):
+        """Load content info by content id"""
+        content_id = self.args.url.split('://')[1]
 
         try:
-            session.sendline('LOADASYNC 42 PID ' + pid)
-            session.expect('LOADRESP 42 .*')
-            content_info = session.after.decode('utf-8').split('\n')[0].split(maxsplit=2)[-1]
+            self.session.timeout = 15
+            self.session.sendline('LOADASYNC 42 PID ' + content_id)
+            self.session.expect('LOADRESP 42 .*')
+            content_info = self.session.after.decode('utf-8').split('\n')[0].split(maxsplit=2)[-1]
             content_info = json.loads(content_info)
+            content_info['content_id'] = content_id
+        except (pexpect.TIMEOUT, pexpect.EOF):
+            self.notify('noinfo')
+            self.close_session()
+            sys.exit(1)
 
-            selector = FilenamesSelectorWindow(content_info['files'])
+        return content_info
+
+    def select_file_id(self):
+        """Run file selector if needed"""
+        icon = self.args.player.split()[0]
+        content_files = self.content_info['files']
+
+        if len(content_files) > 1:
+            selector = FilenamesSelectorWindow(content_files, icon=icon)
             selector.open()
             file_id = selector.selected_file_index
             filename = selector.selected_file
-            print('Selected: ' + str(filename))
+        else:
+            filename, file_id = content_files[0]
+        print('Selected: ' + str(filename))
 
-            if file_id is None:
-                self.notify('noselect')
-                self.close_player(1)
-            self.notify('waiting')
-        except (pexpect.TIMEOUT, pexpect.EOF):
-            self.notify('noinfo')
-            self.close_player(1)
+        if file_id is None:
+            self.notify('noselect')
+            self.close_session()
+            sys.exit(1)
+
+        self.notify('waiting')
+        return file_id
+
+    def start_downloading(self, file_id):
+        """Force engine to start downloading and streaming"""
+        content_id = self.content_info['content_id']
 
         try:
-            session.timeout = 60
-            session.sendline('START PID {} {}'.format(pid, file_id))
-            session.expect('http://.*')
+            self.session.timeout = 60
+            self.session.sendline('START PID {} {}'.format(content_id, file_id))
+            self.session.expect('http://.*')
 
-            self.session = session
-            self.url = session.after.decode('utf-8').split()[0]
+            url = self.session.after.decode('utf-8').split()[0]
 
             self.notify('started')
         except (pexpect.TIMEOUT, pexpect.EOF):
             self.notify('unavailable')
-            self.close_player(1)
+            self.close_session(started=True)
+            sys.exit(1)
 
-    def start_player(self):
+        return url
+
+    def start_player(self, url):
         """Start the media player"""
-
         player_args = self.args.player.split()
-        player_args.append(self.url)
-
-        self.player = psutil.Popen(player_args)
-        self.player.wait()
-        self.session.sendline('STOP')
-        self.session.sendline('SHUTDOWN')
-
-    def close_player(self, code=0):
-        """Close acestream and media player"""
+        player_args.append(url)
 
         try:
-            self.player.kill()
-        except (AttributeError, psutil.NoSuchProcess):
-            print('Media Player not running...')
+            player = psutil.Popen(player_args)
+            player.wait()
+        except FileNotFoundError:
+            self.notify('noplayer')
+            self.close_session(started=True)
+            sys.exit(1)
 
-        try:
-            self.acestream.kill()
-        except (AttributeError, psutil.NoSuchProcess):
-            print('Acestream not running...')
-
-        sys.exit(code)
 
 def main():
     """Start Acestream Launcher"""
-
     try:
-        AcestreamLauncher()
+        AcestreamLauncher().open()
     except (KeyboardInterrupt, EOFError):
         print('Acestream Launcher exiting...')
 
@@ -183,4 +204,5 @@ def main():
 
         sys.exit(0)
 
-main()
+if __name__ == '__main__':
+    main()
