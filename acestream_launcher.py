@@ -25,9 +25,12 @@ class AcestreamLauncher(object):
             description='Open acestream links with any media player'
         )
         parser.add_argument(
-            'url',
-            metavar='URL',
+            '-u', '--url',
             help='the acestream url to play'
+        )
+        parser.add_argument(
+            '-t', '--torrent',
+            help='the link to the torrent file to play'
         )
         parser.add_argument(
             '-p', '--player',
@@ -50,10 +53,18 @@ class AcestreamLauncher(object):
         self.start_session()
         self.content_info = self.load_content_info()
 
+        streaming_started = False
         while True:
-            file_id = self.select_file_id()
+            file_id, options_available = self.select_file_id()
+            if file_id is None:
+                break
+            streaming_started = True
             url = self.start_downloading(file_id)
             self.start_player(url)
+            if not options_available:
+                break
+
+        self.close_session(streaming_started=streaming_started)
 
     def notify(self, message):
         """Show player status notifications"""
@@ -62,9 +73,10 @@ class AcestreamLauncher(object):
         messages = {
             'running': 'Acestream Launcher started.',
             'waiting': 'Waiting for channel response...',
-            'noselect': 'Choose nothing to play...',
             'started': 'Streaming started. Launching player.',
             'noinfo': 'Acestream unable to load content info!',
+            'nourl': 'No url provided to play!',
+            'nocontent': 'No content on the provided link!',
             'noauth': 'Error authenticating to Acestream!',
             'noengine': 'Acestream engine not found in the provided path!',
             'noplayer': 'Player not found in the provided path!',
@@ -76,7 +88,7 @@ class AcestreamLauncher(object):
         self.notifier.show()
 
     def ensure_engine_running(self):
-        """Start acestream engine"""
+        """Ensure acestream engine started"""
         for process in psutil.process_iter():
             if 'acestreamengine' in process.name():
                 break
@@ -114,22 +126,37 @@ class AcestreamLauncher(object):
 
         return session
 
-    def close_session(self, started=False):
-        if started:
+    def close_session(self, streaming_started=False):
+        if streaming_started:
             self.session.sendline('STOP')
         self.session.sendline('SHUTDOWN')
 
+    def format_content_command_args(self):
+        if self.args.url is not None:
+            content_id = self.args.url.split('://')[1]
+            command = 'PID {}'.format(content_id)
+        elif self.args.torrent is not None:
+            torrent_url = self.args.torrent
+            command = 'TORRENT {} 0 0 0'.format(torrent_url)
+        else:
+            command = None
+
+        return command
+
     def load_content_info(self):
         """Load content info by content id"""
-        content_id = self.args.url.split('://')[1]
+        command = self.format_content_command_args()
+        if command is None:
+            self.notify('nourl')
+            self.close_session()
+            sys.exit(1)
 
         try:
             self.session.timeout = 15
-            self.session.sendline('LOADASYNC 42 PID ' + content_id)
+            self.session.sendline('LOADASYNC 42 ' + command)
             self.session.expect('LOADRESP 42 .*')
             content_info = self.session.after.decode('utf-8').split('\n')[0].split(maxsplit=2)[-1]
             content_info = json.loads(content_info)
-            content_info['content_id'] = content_id
         except (pexpect.TIMEOUT, pexpect.EOF):
             self.notify('noinfo')
             self.close_session()
@@ -140,40 +167,41 @@ class AcestreamLauncher(object):
     def select_file_id(self):
         """Run file selector if needed"""
         icon = self.args.player.split()[0]
-        content_files = self.content_info['files']
+        content_files = self.content_info.get('files', [])
 
         if len(content_files) > 1:
+            options_available = True
             selector = FilenamesSelectorWindow(content_files, icon=icon)
             selector.open()
             file_id = selector.selected_file_index
-            filename = selector.selected_file
-        else:
+            filename = selector.selected_file 
+        elif len(content_files) == 1:
+            options_available = False
             filename, file_id = content_files[0]
-        print('Selected: ' + str(filename))
-
-        if file_id is None:
-            # self.notify('noselect')
+        else:
+            self.notify('nocontent')
             self.close_session()
             sys.exit(1)
+        print('Selected: ' + str(filename))
 
-        self.notify('waiting')
-        return file_id
+        return file_id, options_available
 
     def start_downloading(self, file_id):
         """Force engine to start downloading and streaming"""
-        content_id = self.content_info['content_id']
+        self.notify('waiting')
+        command = self.format_content_command_args()
 
         try:
             self.session.timeout = 60
-            self.session.sendline('START PID {} {}'.format(content_id, file_id))
-            self.session.expect('http://.*')
+            self.session.sendline('START {} {}'.format(command, file_id))
+            self.session.expect('START http://.*')
 
-            url = self.session.after.decode('utf-8').split()[0]
+            url = self.session.after.decode('utf-8').split()[1]
 
             self.notify('started')
         except (pexpect.TIMEOUT, pexpect.EOF):
             self.notify('unavailable')
-            self.close_session(started=True)
+            self.close_session(streaming_started=True)
             sys.exit(1)
 
         return url
@@ -185,12 +213,12 @@ class AcestreamLauncher(object):
 
         try:
             env = dict(os.environ)
-            env.pop('LD_PRELOAD')  # fuck opera!
+            env.pop('LD_PRELOAD', None)  # fuck opera!
             player = psutil.Popen(player_args, env=env)
             player.wait()
         except FileNotFoundError:
             self.notify('noplayer')
-            self.close_session(started=True)
+            self.close_session(streaming_started=True)
             sys.exit(1)
 
 
