@@ -25,12 +25,20 @@ class AcestreamLauncher(object):
             description='Open acestream links with any media player'
         )
         parser.add_argument(
-            '-u', '--url',
-            help='the acestream url to play'
+            '-t', '--type',
+            choices=['acestream', 'torrent'],
+            default='acestream',
+            help='the type of the provided url: acestream cid or '
+                 'link to the torrent file (default: acestream)'
         )
         parser.add_argument(
-            '-t', '--torrent',
-            help='the link to the torrent file to play'
+            'url',
+            help='the url to content for playing'
+        )
+        parser.add_argument(
+            '--get-cid',
+            action='store_const', const=True,
+            help='get acestream cid for torrent and exit (available only for --type torrent)'
         )
         parser.add_argument(
             '-p', '--player',
@@ -40,6 +48,7 @@ class AcestreamLauncher(object):
 
         self.app_name = 'Acestream Launcher'
         self.args = parser.parse_args()
+        self.icon = self.args.player.split()[0]
 
         notify2.init(self.app_name)
         self.notifier = notify2.Notification(self.app_name)
@@ -52,6 +61,12 @@ class AcestreamLauncher(object):
     def open(self):
         self.start_session()
         self.content_info = self.load_content_info()
+
+        if self.args.get_cid:
+            content_id = self.get_torrent_cid()
+            print('Content ID: ' + content_id)
+            self.close_session()
+            return
 
         streaming_started = False
         while True:
@@ -68,12 +83,12 @@ class AcestreamLauncher(object):
 
     def notify(self, message):
         """Show player status notifications"""
-
-        icon = self.args.player.split()[0]
+        
         messages = {
             'running': 'Acestream Launcher started.',
             'waiting': 'Waiting for channel response...',
             'started': 'Streaming started. Launching player.',
+            'badtype': 'One can get content id only for torrent.',
             'noinfo': 'Acestream unable to load content info!',
             'nourl': 'No url provided to play!',
             'nocontent': 'No content on the provided link!',
@@ -83,9 +98,12 @@ class AcestreamLauncher(object):
             'unavailable': 'Acestream channel unavailable!'
         }
 
-        print(messages[message])
-        self.notifier.update(self.app_name, messages[message], icon)
-        self.notifier.show()
+        message = messages[message]
+        if sys.stdout.isatty():
+            print(message)
+        else:
+            self.notifier.update(self.app_name, message, self.icon)
+            self.notifier.show()
 
     def ensure_engine_running(self):
         """Ensure acestream engine started"""
@@ -132,11 +150,11 @@ class AcestreamLauncher(object):
         self.session.sendline('SHUTDOWN')
 
     def format_content_command_args(self):
-        if self.args.url is not None:
+        if self.args.type == 'acestream':
             content_id = self.args.url.split('://')[1]
             command = 'PID {}'.format(content_id)
-        elif self.args.torrent is not None:
-            torrent_url = self.args.torrent
+        elif self.args.type == 'torrent':
+            torrent_url = self.args.url
             command = 'TORRENT {} 0 0 0'.format(torrent_url)
         else:
             command = None
@@ -164,14 +182,30 @@ class AcestreamLauncher(object):
 
         return content_info
 
+    def get_torrent_cid(self):
+        if self.args.type != 'torrent':
+            self.notify('badtype')
+            self.close_session()
+            sys.exit(1)
+
+        self.session.sendline(
+            'GETCID checksum={} infohash={} developer=0 affiliate=0 zone=0'.format(
+                self.content_info['checksum'], self.content_info['infohash']
+            )
+        )
+        self.session.expect('##.*')
+        content_id = self.session.after.decode('utf-8')[2:]
+
+        return content_id
+
+
     def select_file_id(self):
         """Run file selector if needed"""
-        icon = self.args.player.split()[0]
         content_files = self.content_info.get('files', [])
 
         if len(content_files) > 1:
             options_available = True
-            selector = FilenamesSelectorWindow(content_files, icon=icon)
+            selector = FilenamesSelectorWindow(content_files, icon=self.icon)
             selector.open()
             file_id = selector.selected_file_index
             filename = selector.selected_file 
@@ -227,12 +261,6 @@ def main():
     try:
         AcestreamLauncher().open()
     except (KeyboardInterrupt, EOFError):
-        print('Acestream Launcher exiting...')
-
-        for process in psutil.process_iter():
-            if 'acestreamengine' in process.name():
-                process.kill()
-
         sys.exit(0)
 
 if __name__ == '__main__':
