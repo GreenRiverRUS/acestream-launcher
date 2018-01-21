@@ -5,15 +5,16 @@ Acestream Launcher allows you to open Acestream links with a Media Player of you
     python, python-psutil, python-pexpect, python-notify2, acestream-engine, python-gobject, gtk3
 
 ## Usage
-    acestream-launcher [-u ACESTREAM_URL] [-t TORRENT_URL] [--player PLAYER]
+    acestream-launcher [--type {acestream,torrent}] [--player PLAYER] URL
 
-## Required arguments (one of)
-    -u, --url ACESTREAM_URL     The acestream url to play, e.g. acestream://1ccf192064ee2d95e91a79f91c6097273d582827
-    -t, --torrent TORRENT_URL   The link to the torrent file to play, e.g. http://rutor.org/download/67346
+## Required arguments
+    -t, --type {acestream,torrent}    The type of the provided url: acestream cid or link to the torrent file (default: acestream)
+    url                               The url to content for playing
 
 ## Optional arguments
-    -h, --help                  Show this help message and exit
-    -p, --player PLAYER         The media player command to use (default: vlc)
+    -h, --help                        Show help message and exit
+    -p, --player PLAYER               The media player command to use (default: vlc)
+    --get-cid                         Get acestream cid for torrent and exit (available only for torrent)
 
 ## Installation
 Install required dependencies and run `install.sh` as root. The script will install acestream-launcher in `opt` directory.
