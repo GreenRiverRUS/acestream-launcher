@@ -74,7 +74,7 @@ class AcestreamLauncher(object):
             if file_id is None:
                 break
             streaming_started = True
-            url = self.start_downloading(file_id)
+            url = self.start_streaming(file_id)
             self.start_player(url)
             if not options_available:
                 break
@@ -149,13 +149,19 @@ class AcestreamLauncher(object):
             self.session.sendline('STOP')
         self.session.sendline('SHUTDOWN')
 
-    def format_content_command_args(self):
+    def format_content_command_args(self, file_id=None):
         if self.args.type == 'acestream':
             content_id = self.args.url.split('://')[1]
-            command = 'PID {}'.format(content_id)
+            if file_id is not None:
+                command = 'PID {} {}'.format(content_id, file_id)
+            else:
+                command = 'PID {}'.format(content_id)
         elif self.args.type == 'torrent':
             torrent_url = self.args.url
-            command = 'TORRENT {} 0 0 0'.format(torrent_url)
+            if file_id is not None:
+                command = 'TORRENT {} {} 0 0 0'.format(torrent_url, file_id)
+            else:
+                command = 'TORRENT {} 0 0 0'.format(torrent_url)
         else:
             command = None
 
@@ -220,14 +226,14 @@ class AcestreamLauncher(object):
 
         return file_id, options_available
 
-    def start_downloading(self, file_id):
+    def start_streaming(self, file_id):
         """Force engine to start downloading and streaming"""
         self.notify('waiting')
-        command = self.format_content_command_args()
+        command = self.format_content_command_args(file_id)
 
         try:
             self.session.timeout = 60
-            self.session.sendline('START {} {}'.format(command, file_id))
+            self.session.sendline('START ' + command)
             self.session.expect('START http://.*')
 
             url = self.session.after.decode('utf-8').split()[1]
